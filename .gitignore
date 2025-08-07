@@ -209,3 +209,4 @@ __marimo__/
 langDocs.md
 plan.md
 .cursor
+*.env
