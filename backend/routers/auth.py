@@ -5,6 +5,9 @@ from urllib.parse import urlencode
 import httpx
 from dotenv import load_dotenv
 from backend.db.db import users_collection
+from backend.db.tokens import save_or_rotate_token
+from typing import List
+from cryptography.fernet import Fernet
 
 
 # Ensure environment variables are loaded for local development
@@ -24,6 +27,15 @@ GOOGLE_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_ENDPOINT = "https://www.googleapis.com/oauth2/v2/userinfo"
 
+# Encryption key for refresh tokens (base64 urlsafe 32-byte key)
+REFRESH_TOKEN_ENC_KEY = os.getenv("REFRESH_TOKEN_ENC_KEY")
+if not REFRESH_TOKEN_ENC_KEY:
+    raise RuntimeError("Missing REFRESH_TOKEN_ENC_KEY for encrypting refresh tokens")
+
+fernet = Fernet(REFRESH_TOKEN_ENC_KEY)
+
+def encrypt_refresh_token(raw: str) -> str:
+    return fernet.encrypt(raw.encode()).decode()
 
 @router.get("/", response_class=HTMLResponse)
 async def home():
@@ -66,7 +78,9 @@ async def auth_callback(request: Request):
         token_response.raise_for_status()
         token_data = token_response.json()
         access_token = token_data.get("access_token")
-        print(token_data)
+        refresh_token = token_data.get("refresh_token")  # may be absent
+        scope_str = token_data.get("scope", "")
+        scopes: List[str] = [s for s in scope_str.split(" ") if s]
 
         if not access_token:
             raise HTTPException(status_code=400, detail="Failed to retrieve access token")
@@ -95,7 +109,22 @@ async def auth_callback(request: Request):
         upsert=True,
     )
 
-    user_id = upsert_result.upserted_id
+    # Fetch the user document to get existing _id when not newly inserted
+    if upsert_result.upserted_id:
+        user_id = upsert_result.upserted_id
+    else:
+        user_doc = await users_collection.find_one({"provider": provider, "provider_id": provider_id})
+        user_id = user_doc.get("_id") if user_doc else None
+
+    # Store/rotate refresh token if provided; otherwise, keep existing
+    if user_id:
+        encrypted = encrypt_refresh_token(refresh_token) if refresh_token else None
+        await save_or_rotate_token(
+            user_id=user_id,
+            provider=provider,
+            scopes=scopes,
+            refresh_token_enc=encrypted,
+        )
 
     return RedirectResponse(
         f"/profile?name={name}&email={email}&picture={userinfo.get('picture','')}{'&id='+str(user_id) if user_id else ''}"

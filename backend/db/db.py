@@ -63,6 +63,7 @@ db: AsyncIOMotorDatabase = client.get_database(_MONGO_DB_NAME)
 
 # Commonly used collections
 users_collection: AsyncIOMotorCollection = db.get_collection("users")
+tokens_collection: AsyncIOMotorCollection = db.get_collection("tokens")
 
 
 def get_database() -> AsyncIOMotorDatabase:
@@ -98,7 +99,22 @@ async def init_indexes() -> None:
         name="provider_providerId_unique",
     )
 
-    # Add more indexes here as needed
+    # Token/session indexes
+    await tokens_collection.create_index(
+        [("user_id", 1), ("provider", 1)],
+        name="user_provider_idx",
+        unique=False,
+    )
+    await tokens_collection.create_index(
+        [("session_id", 1)],
+        name="session_idx",
+        unique=False,
+    )
+    await tokens_collection.create_index(
+        [("revoked_at", 1)],
+        name="revoked_idx",
+        unique=False,
+    )
 
 
 def close_client() -> None:
@@ -113,6 +129,7 @@ __all__ = [
     "client",
     "db",
     "users_collection",
+    "tokens_collection",
     "get_database",
     "get_collection",
     "mongo_db_dependency",
